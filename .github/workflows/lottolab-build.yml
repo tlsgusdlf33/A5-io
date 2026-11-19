@@ -10,14 +10,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: tlsgusdlf33/A5
           ref: claude/korean-lottery-prediction-1qnjpk
           token: ${{ secrets.A5_TOKEN }}
           path: src
           persist-credentials: false
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -64,7 +64,7 @@ jobs:
             | while read -r t; do gh release delete "$t" -R tlsgusdlf33/A5 --yes --cleanup-tag; done
       # 이 공개 저장소에 보안 자료나 앱 코드가 섞여 들어오지 않았는지 검사한다 (파일 이름만 표시).
       - name: Public repo safety check
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: pubcheck
           persist-credentials: false
@@ -74,7 +74,9 @@ jobs:
           bad=0
           f=$(git ls-files | grep -E -i '\.(keystore|jks|p12|pem|key|apk|aab)$|keystore\.properties$|google-services\.json$|\.kt$|\.py$|^android/' || true)
           if [ -n "$f" ]; then echo "::error::보안 자료/앱 코드 파일 발견:"; echo "$f"; bad=1; fi
-          c=$(git grep -l -I -E 'storePassword=|keyPassword=|github_pat_|ghp_[A-Za-z0-9]{20}|BEGIN (RSA |EC )?PRIVATE KEY' -- . || true)
+          c=$(git grep -l -I -E 'storePassword=|keyPassword=|github_pat_|ghp_[A-Za-z0-9]{20}|BEGIN (RSA |EC )?PRIVATE KEY' -- . ':!.github/workflows/lottolab-build.yml' || true)
           if [ -n "$c" ]; then echo "::error::비밀 값 의심 내용 발견:"; echo "$c"; bad=1; fi
+          # 빌드 파일 자체에 비밀번호 값이 직접 적혀 있지 않은지 (비밀번호는 비공개 저장소 파일에서만 읽는다)
+          if grep -E '(storePassword|keyPassword)=[^$"]' .github/workflows/lottolab-build.yml | grep -v -q 'grep'; then echo "::error::빌드 파일에 비밀번호가 직접 적혀 있음"; bad=1; fi
           [ $bad -eq 0 ] && echo "공개 저장소 검사 통과: 보안 자료·앱 코드 없음"
           exit $bad
