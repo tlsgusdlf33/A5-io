@@ -1,0 +1,80 @@
+# 로또 번호 연구소 앱 빌드 (공개 저장소에서 빌드, 코드·서명 키는 비공개 저장소 A5 에만 있음)
+# 필요한 Secret: A5_TOKEN (Fine-grained, A5 저장소만, Contents 읽기/쓰기)
+# 결과물(APK·AAB)은 비공개 저장소 A5 의 Releases 에만 올린다. 이 저장소에는 빌드 파일 하나만 둔다.
+name: 로또 번호 연구소 빌드 (비공개 저장소 코드 사용)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: tlsgusdlf33/A5
+          ref: claude/korean-lottery-prediction-1qnjpk
+          token: ${{ secrets.A5_TOKEN }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # 비밀번호는 비공개 저장소의 android/keystore.properties 에만 있다 (로그에는 가려서 표시).
+      - name: Mask signing passwords
+        working-directory: src/android
+        run: |
+          for k in storePassword keyPassword; do echo "::add-mask::$(grep "^$k=" keystore.properties | cut -d= -f2-)"; done
+          echo "VN=$(grep -m1 'versionName = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')" >> "$GITHUB_ENV"
+      - name: Build APK and AAB (real ads)
+        working-directory: src/android
+        env:
+          USE_REAL_ADS: "1"
+        run: ./gradlew assembleSideloadRelease bundlePlayRelease --no-daemon -q
+      - name: Collect the files
+        run: |
+          mkdir out
+          cp src/android/app/build/outputs/apk/sideload/release/*.apk "out/LottoLab-$VN.apk"
+          cp src/android/app/build/outputs/bundle/playRelease/*.aab "out/LottoLab-$VN-play.aab"
+          (cd out && sha256sum * > SHA256SUMS.txt)
+      - name: Check that the AAB uses the upload key
+        working-directory: src/android
+        run: |
+          P=$(grep '^storePassword=' keystore.properties | cut -d= -f2-)
+          EXPECTED=$(keytool -list -keystore keys/lottolab-upload.jks -storepass "$P" | grep -i 'SHA-256' | sed 's/.*: //')
+          ACTUAL=$(keytool -printcert -jarfile "../../out/LottoLab-$VN-play.aab" | grep 'SHA256' | head -1 | sed 's/.*SHA256: //')
+          test "$EXPECTED" = "$ACTUAL" && echo "업로드 키 서명 확인"
+      - name: Publish as a release in A5 (private)
+        env:
+          GH_TOKEN: ${{ secrets.A5_TOKEN }}
+        run: |
+          gh release delete "v$VN" -R tlsgusdlf33/A5 --yes --cleanup-tag 2>/dev/null || true
+          gh release create "v$VN" out/* -R tlsgusdlf33/A5 --target claude/korean-lottery-prediction-1qnjpk \
+            --title "로또 앱 $VN" --notes "- LottoLab-$VN-play.aab : Google Play Console 업로드용
+          - LottoLab-$VN.apk : 폰에 직접 설치·테스트
+          - SHA256SUMS.txt : 파일 무결성 확인값"
+      # 용량 관리: 이 앱의 예전 릴리스(v* 태그)만 지운다.
+      - name: Delete older releases of this app
+        env:
+          GH_TOKEN: ${{ secrets.A5_TOKEN }}
+        run: |
+          gh release list -R tlsgusdlf33/A5 --limit 100 --json tagName -q '.[].tagName' \
+            | grep '^v' | grep -vx "v$VN" \
+            | while read -r t; do gh release delete "$t" -R tlsgusdlf33/A5 --yes --cleanup-tag; done
+      # 이 공개 저장소에 보안 자료나 앱 코드가 섞여 들어오지 않았는지 검사한다 (파일 이름만 표시).
+      - name: Public repo safety check
+        uses: actions/checkout@v4
+        with:
+          path: pubcheck
+          persist-credentials: false
+      - name: Scan public repo
+        working-directory: pubcheck
+        run: |
+          bad=0
+          f=$(git ls-files | grep -E -i '\.(keystore|jks|p12|pem|key|apk|aab)$|keystore\.properties$|google-services\.json$|\.kt$|\.py$|^android/' || true)
+          if [ -n "$f" ]; then echo "::error::보안 자료/앱 코드 파일 발견:"; echo "$f"; bad=1; fi
+          c=$(git grep -l -I -E 'storePassword=|keyPassword=|github_pat_|ghp_[A-Za-z0-9]{20}|BEGIN (RSA |EC )?PRIVATE KEY' -- . || true)
+          if [ -n "$c" ]; then echo "::error::비밀 값 의심 내용 발견:"; echo "$c"; bad=1; fi
+          [ $bad -eq 0 ] && echo "공개 저장소 검사 통과: 보안 자료·앱 코드 없음"
+          exit $bad
