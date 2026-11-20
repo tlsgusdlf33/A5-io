@@ -27,6 +27,7 @@ jobs:
         run: |
           for k in storePassword keyPassword; do echo "::add-mask::$(grep "^$k=" keystore.properties | cut -d= -f2-)"; done
           echo "VN=$(grep -m1 'versionName = ' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')" >> "$GITHUB_ENV"
+          echo "VC=$(grep -m1 'versionCode = ' app/build.gradle.kts | sed 's/[^0-9]//g')" >> "$GITHUB_ENV"
       - name: Build APK and AAB (real ads)
         working-directory: src/android
         env:
@@ -35,15 +36,15 @@ jobs:
       - name: Collect the files
         run: |
           mkdir out
-          cp src/android/app/build/outputs/apk/sideload/release/*.apk "out/LottoLab-$VN.apk"
-          cp src/android/app/build/outputs/bundle/playRelease/*.aab "out/LottoLab-$VN-play.aab"
+          cp src/android/app/build/outputs/apk/sideload/release/*.apk "out/LottoLab-$VN-code$VC.apk"
+          cp src/android/app/build/outputs/bundle/playRelease/*.aab "out/LottoLab-$VN-code$VC-play.aab"
           (cd out && sha256sum * > SHA256SUMS.txt)
       - name: Check that the AAB uses the upload key
         working-directory: src/android
         run: |
           P=$(grep '^storePassword=' keystore.properties | cut -d= -f2-)
           EXPECTED=$(keytool -list -keystore keys/lottolab-upload.jks -storepass "$P" | grep -i 'SHA-256' | sed 's/.*: //')
-          ACTUAL=$(keytool -printcert -jarfile "../../out/LottoLab-$VN-play.aab" | grep 'SHA256' | head -1 | sed 's/.*SHA256: //')
+          ACTUAL=$(keytool -printcert -jarfile "../../out/LottoLab-$VN-code$VC-play.aab" | grep 'SHA256' | head -1 | sed 's/.*SHA256: //')
           test "$EXPECTED" = "$ACTUAL" && echo "업로드 키 서명 확인"
       - name: Publish as a release in A5 (private)
         env:
@@ -51,8 +52,8 @@ jobs:
         run: |
           gh release delete "v$VN" -R tlsgusdlf33/A5 --yes --cleanup-tag 2>/dev/null || true
           gh release create "v$VN" out/* -R tlsgusdlf33/A5 --target claude/korean-lottery-prediction-1qnjpk \
-            --title "로또 앱 $VN" --notes "- LottoLab-$VN-play.aab : Google Play Console 업로드용
-          - LottoLab-$VN.apk : 폰에 직접 설치·테스트
+            --title "로또 앱 $VN" --notes "- LottoLab-$VN-code$VC-play.aab : Google Play Console 업로드용
+          - LottoLab-$VN-code$VC.apk : 폰에 직접 설치·테스트
           - SHA256SUMS.txt : 파일 무결성 확인값"
       # 용량 관리: 이 앱의 예전 릴리스(v* 태그)만 지운다.
       - name: Delete older releases of this app
